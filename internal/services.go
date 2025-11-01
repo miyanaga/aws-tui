@@ -3,10 +3,13 @@ package internal
 import (
 	"fmt"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/bporter816/aws-tui/internal/model"
 	"github.com/bporter816/aws-tui/internal/repo"
 	"github.com/bporter816/aws-tui/internal/ui"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -14,8 +17,11 @@ import (
 
 type Services struct {
 	*ui.Tree
-	repos map[string]interface{}
-	app   *Application
+	repos        map[string]interface{}
+	app          *Application
+	searchBuffer string
+	allNodes     []*tview.TreeNode
+	searchTimer  *time.Timer
 }
 
 func NewServices(repos map[string]interface{}, app *Application) *Services {
@@ -129,9 +135,11 @@ func NewServices(repos map[string]interface{}, app *Application) *Services {
 	}
 	root := tview.NewTreeNode("Services")
 	s := &Services{
-		Tree:  ui.NewTree(root),
-		repos: repos,
-		app:   app,
+		Tree:         ui.NewTree(root),
+		repos:        repos,
+		app:          app,
+		searchBuffer: "",
+		allNodes:     make([]*tview.TreeNode, 0),
 	}
 	// sort the keys
 	var keys []string
@@ -143,14 +151,17 @@ func NewServices(repos map[string]interface{}, app *Application) *Services {
 		v := m[k]
 		n := tview.NewTreeNode(k)
 		root.AddChild(n)
+		s.allNodes = append(s.allNodes, n)
 		for _, view := range v {
 			leaf := tview.NewTreeNode(view)
 			leaf.SetReference(fmt.Sprintf("%v.%v", k, view))
 			n.AddChild(leaf)
+			s.allNodes = append(s.allNodes, leaf)
 		}
 		n.CollapseAll()
 	}
 	s.SetSelectedFunc(s.selectHandler)
+	s.setupSearchCapture()
 	return s
 }
 
@@ -290,6 +301,107 @@ func (s Services) selectHandler(n *tview.TreeNode) {
 		panic("unknown service")
 	}
 	s.app.AddAndSwitch(item)
+}
+
+func (s *Services) setupSearchCapture() {
+	s.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		// Handle backspace in search
+		if event.Key() == tcell.KeyBackspace || event.Key() == tcell.KeyBackspace2 {
+			if len(s.searchBuffer) > 0 {
+				s.searchBuffer = s.searchBuffer[:len(s.searchBuffer)-1]
+				s.updateSearch()
+				s.resetSearchTimer()
+				return nil
+			}
+			return event
+		}
+
+		// Handle printable characters for search
+		if event.Key() == tcell.KeyRune {
+			s.searchBuffer += string(event.Rune())
+			s.updateSearch()
+			s.resetSearchTimer()
+			return nil
+		}
+
+		// Clear search on Escape
+		if event.Key() == tcell.KeyEscape {
+			s.clearSearch()
+			return event
+		}
+
+		// Other keys (navigation, enter, etc.) clear search
+		if event.Key() == tcell.KeyEnter || event.Key() == tcell.KeyUp || event.Key() == tcell.KeyDown {
+			s.clearSearch()
+			return event
+		}
+
+		return event
+	})
+}
+
+func (s *Services) resetSearchTimer() {
+	// Stop existing timer if any
+	if s.searchTimer != nil {
+		s.searchTimer.Stop()
+	}
+
+	// Create new timer that will clear search after 1 second
+	s.searchTimer = time.AfterFunc(1*time.Second, func() {
+		s.app.app.QueueUpdateDraw(func() {
+			s.clearSearch()
+		})
+	})
+}
+
+func (s *Services) clearSearch() {
+	s.searchBuffer = ""
+	s.SetTitle("")
+	if s.searchTimer != nil {
+		s.searchTimer.Stop()
+		s.searchTimer = nil
+	}
+}
+
+func (s *Services) updateSearch() {
+	if s.searchBuffer == "" {
+		s.clearSearch()
+		return
+	}
+
+	// Show search buffer in title
+	s.SetTitle(fmt.Sprintf(" Search: %s ", s.searchBuffer))
+
+	// Find matching node
+	searchLower := strings.ToLower(s.searchBuffer)
+	for _, node := range s.allNodes {
+		nodeText := strings.ToLower(node.GetText())
+		if strings.HasPrefix(nodeText, searchLower) {
+			// Expand parent if this is a child node
+			parent := s.findParent(node)
+			if parent != nil {
+				parent.Expand()
+			}
+			s.SetCurrentNode(node)
+			return
+		}
+	}
+}
+
+func (s *Services) findParent(target *tview.TreeNode) *tview.TreeNode {
+	var findParentRecursive func(node *tview.TreeNode) *tview.TreeNode
+	findParentRecursive = func(node *tview.TreeNode) *tview.TreeNode {
+		for _, child := range node.GetChildren() {
+			if child == target {
+				return node
+			}
+			if found := findParentRecursive(child); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	return findParentRecursive(s.Root)
 }
 
 func (s Services) GetKeyActions() []KeyAction {

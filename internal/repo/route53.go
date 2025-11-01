@@ -117,3 +117,60 @@ func (r Route53) ListTags(typeAndName string) (model.Tags, error) {
 	}
 	return tags, nil
 }
+
+func (r Route53) CreateRecord(hostedZoneId string, record r53Types.ResourceRecordSet) error {
+	change := r53Types.Change{
+		Action:            r53Types.ChangeActionCreate,
+		ResourceRecordSet: &record,
+	}
+	_, err := r.r53Client.ChangeResourceRecordSets(
+		context.TODO(),
+		&r53.ChangeResourceRecordSetsInput{
+			HostedZoneId: aws.String(hostedZoneId),
+			ChangeBatch: &r53Types.ChangeBatch{
+				Changes: []r53Types.Change{change},
+			},
+		},
+	)
+	return err
+}
+
+func (r Route53) UpdateRecord(hostedZoneId string, oldRecord, newRecord r53Types.ResourceRecordSet) error {
+	changes := []r53Types.Change{
+		{
+			Action:            r53Types.ChangeActionDelete,
+			ResourceRecordSet: &oldRecord,
+		},
+		{
+			Action:            r53Types.ChangeActionCreate,
+			ResourceRecordSet: &newRecord,
+		},
+	}
+	_, err := r.r53Client.ChangeResourceRecordSets(
+		context.TODO(),
+		&r53.ChangeResourceRecordSetsInput{
+			HostedZoneId: aws.String(hostedZoneId),
+			ChangeBatch: &r53Types.ChangeBatch{
+				Changes: changes,
+			},
+		},
+	)
+	return err
+}
+
+func (r Route53) DeleteRecord(hostedZoneId string, record r53Types.ResourceRecordSet) error {
+	change := r53Types.Change{
+		Action:            r53Types.ChangeActionDelete,
+		ResourceRecordSet: &record,
+	}
+	_, err := r.r53Client.ChangeResourceRecordSets(
+		context.TODO(),
+		&r53.ChangeResourceRecordSetsInput{
+			HostedZoneId: aws.String(hostedZoneId),
+			ChangeBatch: &r53Types.ChangeBatch{
+				Changes: []r53Types.Change{change},
+			},
+		},
+	)
+	return err
+}

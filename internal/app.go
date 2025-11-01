@@ -165,6 +165,18 @@ func NewApplication() *Application {
 			return nil
 		}
 
+		// Ctrl+t: Return to top (Services page)
+		if event.Key() == tcell.KeyCtrlT {
+			a.ReturnToTop()
+			return nil
+		}
+
+		// Ctrl+r: Refresh
+		if event.Key() == tcell.KeyCtrlR {
+			a.refreshHandler()
+			return nil
+		}
+
 		// pass down Enter keypress to the component
 		if event.Key() == tcell.KeyEnter {
 			return event
@@ -194,12 +206,37 @@ func (a Application) GetActiveKeyActions() []KeyAction {
 	localActions := primitive.(Component).GetKeyActions()
 	globalActions := []KeyAction{
 		{
-			Key:         tcell.NewEventKey(tcell.KeyRune, 'r', tcell.ModCtrl),
+			Key:         tcell.NewEventKey(tcell.KeyCtrlR, 0, tcell.ModNone),
 			Description: "Refresh",
 			Action:      a.refreshHandler,
 		},
+		{
+			Key:         tcell.NewEventKey(tcell.KeyCtrlT, 0, tcell.ModNone),
+			Description: "Top",
+			Action:      a.ReturnToTop,
+		},
 	}
 	return append(localActions, globalActions...)
+}
+
+func (a *Application) ReturnToTop() {
+	// Close all pages except the first (Services)
+	for a.pages.GetPageCount() > 1 {
+		a.components = a.components[:len(a.components)-1]
+		oldName, _ := a.pages.GetFrontPage()
+		a.pages.RemovePage(oldName)
+	}
+
+	// Switch to the first page
+	if a.pages.GetPageCount() > 0 {
+		firstName, _ := a.pages.GetFrontPage()
+		a.pages.SwitchToPage(firstName)
+		if len(a.components) > 0 {
+			a.pages.SetTitle(fmt.Sprintf(" %v ", a.components[0].GetService()))
+		}
+		a.header.Render()
+		a.footer.Render()
+	}
 }
 
 func (a *Application) AddAndSwitch(v Component) {
