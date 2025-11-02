@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3Types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/bporter816/aws-tui/internal/model"
 )
 
@@ -183,4 +185,52 @@ func (s S3) ListTags(typeAndName string) (model.Tags, error) {
 	default:
 		return model.Tags{}, errors.New("must use bucket or object for s3 tags")
 	}
+}
+
+func (s S3) UploadObject(bucketName, key, filePath, contentType string, acl s3Types.ObjectCannedACL) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	input := &s3.PutObjectInput{
+		Bucket: aws.String(bucketName),
+		Key:    aws.String(key),
+		Body:   file,
+	}
+
+	if contentType != "" {
+		input.ContentType = aws.String(contentType)
+	}
+
+	if acl != "" {
+		input.ACL = acl
+	}
+
+	_, err = s.s3Client.PutObject(context.TODO(), input)
+	return err
+}
+
+func (s S3) DownloadObject(bucketName, key, destPath string) error {
+	out, err := s.s3Client.GetObject(
+		context.TODO(),
+		&s3.GetObjectInput{
+			Bucket: aws.String(bucketName),
+			Key:    aws.String(key),
+		},
+	)
+	if err != nil {
+		return err
+	}
+	defer out.Body.Close()
+
+	file, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, out.Body)
+	return err
 }

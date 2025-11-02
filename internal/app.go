@@ -43,6 +43,8 @@ type Application struct {
 	header     *Header
 	footer     *Footer
 	components []Component
+	running    bool
+	region     string
 }
 
 func NewApplication() *Application {
@@ -140,28 +142,44 @@ func NewApplication() *Application {
 		"Service Quotas":     sqRepo,
 	}
 
-	services := NewServices(repos, a)
 	pages := tview.NewPages()
 	pages.SetBorder(true)
 
-	header := NewHeader(stsRepo, iamRepo, a)
-	footer := NewFooter(a)
-
 	flex := tview.NewFlex()
 	flex.SetDirection(tview.FlexRow)
-	flex.AddItem(header, 4, 0, false) // header is 4 rows
-	flex.AddItem(pages, 0, 1, true)   // main viewport is resizable
-	flex.AddItem(footer, 1, 0, false) // footer is 1 row
 
 	app.SetRoot(flex, true).SetFocus(pages)
 	a.app = app
 	a.pages = pages
+	a.region = cfg.Region
+
+	header := NewHeader(stsRepo, iamRepo, a)
+	footer := NewFooter(a)
+
+	flex.AddItem(header, 4, 0, false) // header is 4 rows
+	flex.AddItem(pages, 0, 1, true)   // main viewport is resizable
+	flex.AddItem(footer, 1, 0, false) // footer is 1 row
+
 	a.header = header
 	a.footer = footer
+
+	services := NewServices(repos, a)
 	a.AddAndSwitch(services)
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {
 			a.Close()
+			return nil
+		}
+
+		// Ctrl+t: Return to top (Services page)
+		if event.Key() == tcell.KeyCtrlT {
+			a.ReturnToTop()
+			return nil
+		}
+
+		// Ctrl+r: Refresh
+		if event.Key() == tcell.KeyCtrlR {
+			a.refreshHandler()
 			return nil
 		}
 
@@ -182,9 +200,12 @@ func NewApplication() *Application {
 	return a
 }
 
-func (a Application) refreshHandler() {
+func (a *Application) refreshHandler() {
 	_, primitive := a.pages.GetFrontPage()
 	primitive.(Component).Render()
+	if a.running {
+		a.app.Draw()
+	}
 }
 
 func (a Application) GetActiveKeyActions() []KeyAction {
@@ -194,12 +215,40 @@ func (a Application) GetActiveKeyActions() []KeyAction {
 	localActions := primitive.(Component).GetKeyActions()
 	globalActions := []KeyAction{
 		{
-			Key:         tcell.NewEventKey(tcell.KeyRune, 'r', tcell.ModCtrl),
+			Key:         tcell.NewEventKey(tcell.KeyCtrlR, 0, tcell.ModNone),
 			Description: "Refresh",
 			Action:      a.refreshHandler,
 		},
+		{
+			Key:         tcell.NewEventKey(tcell.KeyCtrlT, 0, tcell.ModNone),
+			Description: "Top",
+			Action:      a.ReturnToTop,
+		},
 	}
 	return append(localActions, globalActions...)
+}
+
+func (a *Application) ReturnToTop() {
+	// Close all pages except the first (Services)
+	for a.pages.GetPageCount() > 1 {
+		a.components = a.components[:len(a.components)-1]
+		oldName, _ := a.pages.GetFrontPage()
+		a.pages.RemovePage(oldName)
+	}
+
+	// Switch to the first page
+	if a.pages.GetPageCount() > 0 {
+		firstName, _ := a.pages.GetFrontPage()
+		a.pages.SwitchToPage(firstName)
+		if len(a.components) > 0 {
+			a.pages.SetTitle(fmt.Sprintf(" %v ", a.components[0].GetService()))
+		}
+		a.header.Render()
+		a.footer.Render()
+		if a.running {
+			a.app.Draw()
+		}
+	}
 }
 
 func (a *Application) AddAndSwitch(v Component) {
@@ -212,6 +261,9 @@ func (a *Application) AddAndSwitch(v Component) {
 	a.header.Render() // this has to happen after we update the pages view
 	a.footer.Render()
 	a.pages.SetTitle(fmt.Sprintf(" %v ", v.GetService()))
+	if a.running {
+		a.app.Draw()
+	}
 }
 
 func (a *Application) Close() {
@@ -229,8 +281,12 @@ func (a *Application) Close() {
 	a.pages.SetTitle(fmt.Sprintf(" %v ", a.components[len(a.components)-1].GetService()))
 	a.header.Render()
 	a.footer.Render()
+	if a.running {
+		a.app.Draw()
+	}
 }
 
-func (a Application) Run() error {
+func (a *Application) Run() error {
+	a.running = true
 	return a.app.Run()
 }

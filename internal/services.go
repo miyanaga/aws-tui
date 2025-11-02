@@ -3,10 +3,14 @@ package internal
 import (
 	"fmt"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/bporter816/aws-tui/internal/model"
 	"github.com/bporter816/aws-tui/internal/repo"
+	"github.com/bporter816/aws-tui/internal/settings"
 	"github.com/bporter816/aws-tui/internal/ui"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -14,8 +18,15 @@ import (
 
 type Services struct {
 	*ui.Tree
-	repos map[string]interface{}
-	app   *Application
+	repos          map[string]interface{}
+	app            *Application
+	searchBuffer   string
+	allNodes       []*tview.TreeNode
+	searchTimer    *time.Timer
+	settings       *settings.Settings
+	favoritesNode  *tview.TreeNode
+	servicesNode   *tview.TreeNode
+	serviceMap     map[string][]string
 }
 
 func NewServices(repos map[string]interface{}, app *Application) *Services {
@@ -127,31 +138,88 @@ func NewServices(repos map[string]interface{}, app *Application) *Services {
 			"Internet Gateways",
 		},
 	}
-	root := tview.NewTreeNode("Services")
-	s := &Services{
-		Tree:  ui.NewTree(root),
-		repos: repos,
-		app:   app,
+
+	// Load settings
+	userSettings, err := settings.Load()
+	if err != nil {
+		userSettings = &settings.Settings{Favorites: []string{}}
 	}
-	// sort the keys
+
+	root := tview.NewTreeNode("")
+	s := &Services{
+		Tree:         ui.NewTree(root),
+		repos:        repos,
+		app:          app,
+		searchBuffer: "",
+		allNodes:     make([]*tview.TreeNode, 0),
+		settings:     userSettings,
+		serviceMap:   m,
+	}
+
+	s.buildTree()
+	s.SetSelectedFunc(s.selectHandler)
+	s.setupSearchCapture()
+
+	// Set default focus to first favorite if exists
+	if len(userSettings.Favorites) > 0 && s.favoritesNode != nil {
+		s.favoritesNode.Expand()
+		children := s.favoritesNode.GetChildren()
+		if len(children) > 0 {
+			s.SetCurrentNode(children[0])
+		}
+	}
+
+	return s
+}
+
+func (s *Services) buildTree() {
+	// Clear existing tree
+	s.Root.ClearChildren()
+	s.allNodes = make([]*tview.TreeNode, 0)
+
+	// Build Favorites section if favorites exist
+	if len(s.settings.Favorites) > 0 {
+		s.favoritesNode = tview.NewTreeNode("Favorites")
+		s.Root.AddChild(s.favoritesNode)
+
+		for _, fav := range s.settings.Favorites {
+			parts := strings.SplitN(fav, ".", 2)
+			if len(parts) == 2 {
+				displayText := parts[0] + " > " + parts[1]
+				leaf := tview.NewTreeNode(displayText)
+				leaf.SetReference(fav)
+				s.favoritesNode.AddChild(leaf)
+				s.allNodes = append(s.allNodes, leaf)
+			}
+		}
+		s.favoritesNode.Expand()
+	}
+
+	// Build Services section
+	s.servicesNode = tview.NewTreeNode("Services")
+	s.Root.AddChild(s.servicesNode)
+
+	// Sort service keys
 	var keys []string
-	for k := range m {
+	for k := range s.serviceMap {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+
 	for _, k := range keys {
-		v := m[k]
+		v := s.serviceMap[k]
 		n := tview.NewTreeNode(k)
-		root.AddChild(n)
+		s.servicesNode.AddChild(n)
+		s.allNodes = append(s.allNodes, n)
 		for _, view := range v {
 			leaf := tview.NewTreeNode(view)
 			leaf.SetReference(fmt.Sprintf("%v.%v", k, view))
 			n.AddChild(leaf)
+			s.allNodes = append(s.allNodes, leaf)
 		}
 		n.CollapseAll()
 	}
-	s.SetSelectedFunc(s.selectHandler)
-	return s
+	s.servicesNode.Expand()
 }
 
 func (s Services) GetService() string {
@@ -163,7 +231,10 @@ func (s Services) GetLabels() []string {
 }
 
 func (s Services) selectHandler(n *tview.TreeNode) {
-	if n.GetLevel() < 2 {
+	// Handle root nodes (Favorites, Services) and service category nodes
+	ref := n.GetReference()
+	if ref == nil {
+		// This is a Favorites or Services node, or a service category
 		if n.IsExpanded() {
 			n.Collapse()
 		} else {
@@ -175,7 +246,7 @@ func (s Services) selectHandler(n *tview.TreeNode) {
 		return
 	}
 
-	view := n.GetReference().(string)
+	view := ref.(string)
 	var item Component
 	switch view {
 	case "ACM.Certificates":
@@ -292,8 +363,190 @@ func (s Services) selectHandler(n *tview.TreeNode) {
 	s.app.AddAndSwitch(item)
 }
 
+func (s *Services) setupSearchCapture() {
+	s.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		// Handle 'd' key to add to favorites
+		if event.Key() == tcell.KeyRune && event.Rune() == 'd' {
+			s.addToFavorites()
+			return nil
+		}
+
+		// Handle 'x' key to remove from favorites
+		if event.Key() == tcell.KeyRune && event.Rune() == 'x' {
+			s.removeFromFavorites()
+			return nil
+		}
+
+		// Handle backspace in search
+		if event.Key() == tcell.KeyBackspace || event.Key() == tcell.KeyBackspace2 {
+			if len(s.searchBuffer) > 0 {
+				s.searchBuffer = s.searchBuffer[:len(s.searchBuffer)-1]
+				s.updateSearch()
+				s.resetSearchTimer()
+				return nil
+			}
+			return event
+		}
+
+		// Handle printable characters for search
+		if event.Key() == tcell.KeyRune {
+			s.searchBuffer += string(event.Rune())
+			s.updateSearch()
+			s.resetSearchTimer()
+			return nil
+		}
+
+		// Clear search on Escape
+		if event.Key() == tcell.KeyEscape {
+			s.clearSearch()
+			return event
+		}
+
+		// Other keys (navigation, enter, etc.) clear search
+		if event.Key() == tcell.KeyEnter || event.Key() == tcell.KeyUp || event.Key() == tcell.KeyDown {
+			s.clearSearch()
+			return event
+		}
+
+		return event
+	})
+}
+
+func (s *Services) addToFavorites() {
+	node := s.GetCurrentNode()
+	if node == nil {
+		return
+	}
+
+	ref := node.GetReference()
+	if ref == nil {
+		return
+	}
+
+	view := ref.(string)
+	if err := s.settings.AddFavorite(view); err == nil {
+		// Rebuild tree to show new favorite
+		currentRef := view
+		s.buildTree()
+		// Try to restore focus to the added item in Favorites
+		if s.favoritesNode != nil {
+			for _, child := range s.favoritesNode.GetChildren() {
+				if child.GetReference() == currentRef {
+					s.SetCurrentNode(child)
+					return
+				}
+			}
+		}
+	}
+}
+
+func (s *Services) removeFromFavorites() {
+	node := s.GetCurrentNode()
+	if node == nil {
+		return
+	}
+
+	ref := node.GetReference()
+	if ref == nil {
+		return
+	}
+
+	// Check if we're in the Favorites section
+	parent := s.findParent(node)
+	if parent != s.favoritesNode {
+		return
+	}
+
+	view := ref.(string)
+	if err := s.settings.RemoveFavorite(view); err == nil {
+		// Rebuild tree to remove favorite
+		s.buildTree()
+		// Set focus to Favorites node or first service
+		if s.favoritesNode != nil && len(s.favoritesNode.GetChildren()) > 0 {
+			s.SetCurrentNode(s.favoritesNode.GetChildren()[0])
+		} else if s.servicesNode != nil {
+			s.SetCurrentNode(s.servicesNode)
+		}
+	}
+}
+
+func (s *Services) resetSearchTimer() {
+	// Stop existing timer if any
+	if s.searchTimer != nil {
+		s.searchTimer.Stop()
+	}
+
+	// Create new timer that will clear search after 1 second
+	s.searchTimer = time.AfterFunc(1*time.Second, func() {
+		s.app.app.QueueUpdateDraw(func() {
+			s.clearSearch()
+		})
+	})
+}
+
+func (s *Services) clearSearch() {
+	s.searchBuffer = ""
+	s.SetTitle("")
+	if s.searchTimer != nil {
+		s.searchTimer.Stop()
+		s.searchTimer = nil
+	}
+}
+
+func (s *Services) updateSearch() {
+	if s.searchBuffer == "" {
+		s.clearSearch()
+		return
+	}
+
+	// Show search buffer in title
+	s.SetTitle(fmt.Sprintf(" Search: %s ", s.searchBuffer))
+
+	// Find matching node
+	searchLower := strings.ToLower(s.searchBuffer)
+	for _, node := range s.allNodes {
+		nodeText := strings.ToLower(node.GetText())
+		if strings.HasPrefix(nodeText, searchLower) {
+			// Expand parent if this is a child node
+			parent := s.findParent(node)
+			if parent != nil {
+				parent.Expand()
+			}
+			s.SetCurrentNode(node)
+			return
+		}
+	}
+}
+
+func (s *Services) findParent(target *tview.TreeNode) *tview.TreeNode {
+	var findParentRecursive func(node *tview.TreeNode) *tview.TreeNode
+	findParentRecursive = func(node *tview.TreeNode) *tview.TreeNode {
+		for _, child := range node.GetChildren() {
+			if child == target {
+				return node
+			}
+			if found := findParentRecursive(child); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	return findParentRecursive(s.Root)
+}
+
 func (s Services) GetKeyActions() []KeyAction {
-	return []KeyAction{}
+	return []KeyAction{
+		{
+			Key:         tcell.NewEventKey(tcell.KeyRune, 'd', tcell.ModNone),
+			Description: "Add to Favorites",
+			Action:      s.addToFavorites,
+		},
+		{
+			Key:         tcell.NewEventKey(tcell.KeyRune, 'x', tcell.ModNone),
+			Description: "Remove from Favorites",
+			Action:      s.removeFromFavorites,
+		},
+	}
 }
 
 func (s Services) Render() {
