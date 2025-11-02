@@ -109,6 +109,11 @@ func (s *S3Buckets) setupSearch() {
 	})
 
 	s.searchField.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyTab {
+			// Tab: Switch to table
+			s.commitFilter()
+			return nil
+		}
 		if event.Key() == tcell.KeyEnter {
 			s.commitFilter()
 			return nil
@@ -118,6 +123,11 @@ func (s *S3Buckets) setupSearch() {
 
 	s.table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyRune && event.Rune() == '/' {
+			s.showSearch()
+			return nil
+		}
+		if event.Key() == tcell.KeyTab {
+			// Tab: Switch to filter field
 			s.showSearch()
 			return nil
 		}

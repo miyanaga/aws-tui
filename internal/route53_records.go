@@ -129,6 +129,11 @@ func (r *Route53Records) setupSearch() {
 	})
 
 	r.searchField.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyTab {
+			// Tab: Switch to table
+			r.commitFilter()
+			return nil
+		}
 		if event.Key() == tcell.KeyEnter {
 			// Enter: Commit filter and keep filtered state
 			r.commitFilter()
@@ -139,6 +144,11 @@ func (r *Route53Records) setupSearch() {
 
 	r.table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyRune && event.Rune() == '/' {
+			r.showSearch()
+			return nil
+		}
+		if event.Key() == tcell.KeyTab {
+			// Tab: Switch to filter field
 			r.showSearch()
 			return nil
 		}

@@ -43,6 +43,8 @@ type Application struct {
 	header     *Header
 	footer     *Footer
 	components []Component
+	running    bool
+	region     string
 }
 
 func NewApplication() *Application {
@@ -140,24 +142,28 @@ func NewApplication() *Application {
 		"Service Quotas":     sqRepo,
 	}
 
-	services := NewServices(repos, a)
 	pages := tview.NewPages()
 	pages.SetBorder(true)
 
-	header := NewHeader(stsRepo, iamRepo, a)
-	footer := NewFooter(a)
-
 	flex := tview.NewFlex()
 	flex.SetDirection(tview.FlexRow)
-	flex.AddItem(header, 4, 0, false) // header is 4 rows
-	flex.AddItem(pages, 0, 1, true)   // main viewport is resizable
-	flex.AddItem(footer, 1, 0, false) // footer is 1 row
 
 	app.SetRoot(flex, true).SetFocus(pages)
 	a.app = app
 	a.pages = pages
+	a.region = cfg.Region
+
+	header := NewHeader(stsRepo, iamRepo, a)
+	footer := NewFooter(a)
+
+	flex.AddItem(header, 4, 0, false) // header is 4 rows
+	flex.AddItem(pages, 0, 1, true)   // main viewport is resizable
+	flex.AddItem(footer, 1, 0, false) // footer is 1 row
+
 	a.header = header
 	a.footer = footer
+
+	services := NewServices(repos, a)
 	a.AddAndSwitch(services)
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {
@@ -194,9 +200,12 @@ func NewApplication() *Application {
 	return a
 }
 
-func (a Application) refreshHandler() {
+func (a *Application) refreshHandler() {
 	_, primitive := a.pages.GetFrontPage()
 	primitive.(Component).Render()
+	if a.running {
+		a.app.Draw()
+	}
 }
 
 func (a Application) GetActiveKeyActions() []KeyAction {
@@ -236,6 +245,9 @@ func (a *Application) ReturnToTop() {
 		}
 		a.header.Render()
 		a.footer.Render()
+		if a.running {
+			a.app.Draw()
+		}
 	}
 }
 
@@ -249,6 +261,9 @@ func (a *Application) AddAndSwitch(v Component) {
 	a.header.Render() // this has to happen after we update the pages view
 	a.footer.Render()
 	a.pages.SetTitle(fmt.Sprintf(" %v ", v.GetService()))
+	if a.running {
+		a.app.Draw()
+	}
 }
 
 func (a *Application) Close() {
@@ -266,8 +281,12 @@ func (a *Application) Close() {
 	a.pages.SetTitle(fmt.Sprintf(" %v ", a.components[len(a.components)-1].GetService()))
 	a.header.Render()
 	a.footer.Render()
+	if a.running {
+		a.app.Draw()
+	}
 }
 
-func (a Application) Run() error {
+func (a *Application) Run() error {
+	a.running = true
 	return a.app.Run()
 }

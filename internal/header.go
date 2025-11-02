@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/bporter816/aws-tui/internal/repo"
 	"github.com/rivo/tview"
-	"os/exec"
 	"strings"
 )
 
@@ -43,18 +42,26 @@ func NewHeader(stsRepo *repo.STS, iamRepo *repo.IAM, app *Application) *Header {
 }
 
 func (h Header) Render() {
-	// The AWS Go SDK doesn't provide a nice way to get the current region so get the answer from the AWS CLI
-	regionCmd := exec.Command("aws", "configure", "get", "region")
-	regionOutput, err := regionCmd.Output()
-	if err != nil {
-		panic(err)
+	var account, arn, userId, region string
+
+	// Get region from application
+	region = h.app.region
+	if region == "" {
+		region = "unknown"
 	}
 
-	var account, arn, userId string
+	// Get caller identity
 	identityModel, err := h.stsRepo.GetCallerIdentity()
 	if err != nil {
-		panic(err)
+		// Show error instead of panicking
+		accountInfoStr := fmt.Sprintf("[red::b]Error:[white::-] Failed to get AWS credentials\n")
+		accountInfoStr += fmt.Sprintf("[red::b]Details:[white::-] %v\n", err.Error())
+		accountInfoStr += fmt.Sprintf("[orange::b]Region:[white::-]  %v", region)
+		h.accountInfo.SetText(accountInfoStr)
+		h.renderKeybinds()
+		return
 	}
+
 	if identityModel.Account != nil {
 		account = *identityModel.Account
 	}
@@ -65,7 +72,8 @@ func (h Header) Render() {
 		userId = *identityModel.UserId
 	}
 
-	aliases, err := h.iamRepo.ListAccountAliases()
+	// Get account aliases (ignore errors)
+	aliases, _ := h.iamRepo.ListAccountAliases()
 	var aliasesStr string
 	if len(aliases) > 0 {
 		aliasesStr = fmt.Sprintf(" (%v)", strings.Join(aliases, ", "))
@@ -74,9 +82,13 @@ func (h Header) Render() {
 	accountInfoStr := fmt.Sprintf("[orange::b]Account:[white::-] %v%v\n", account, aliasesStr)
 	accountInfoStr += fmt.Sprintf("[orange::b]ARN:[white::-]     %v\n", arn)
 	accountInfoStr += fmt.Sprintf("[orange::b]User ID:[white::-] %v\n", userId)
-	accountInfoStr += fmt.Sprintf("[orange::b]Region:[white::-]  %v", string(regionOutput))
+	accountInfoStr += fmt.Sprintf("[orange::b]Region:[white::-]  %v", region)
 	h.accountInfo.SetText(accountInfoStr)
 
+	h.renderKeybinds()
+}
+
+func (h Header) renderKeybinds() {
 	h.Box = tview.NewBox() // this is needed because the areas not covered by items are considered transparent and will linger otherwise
 	h.keybindInfo.Clear()
 	actions := h.app.GetActiveKeyActions()

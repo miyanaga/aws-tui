@@ -7,7 +7,8 @@ import (
 )
 
 type Settings struct {
-	Favorites []string `json:"favorites"`
+	Favorites      []string `json:"favorites"`
+	LocalDirectory string   `json:"local_directory,omitempty"`
 }
 
 func getSettingsPath() (string, error) {
@@ -94,4 +95,30 @@ func (s *Settings) IsFavorite(view string) bool {
 		}
 	}
 	return false
+}
+
+func (s *Settings) GetLocalDirectory() string {
+	if s.LocalDirectory == "" {
+		// Default to current working directory
+		cwd, err := os.Getwd()
+		if err != nil {
+			return os.Getenv("HOME")
+		}
+		return cwd
+	}
+	return s.LocalDirectory
+}
+
+func (s *Settings) SetLocalDirectory(dir string) error {
+	// Validate directory exists
+	info, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return os.ErrInvalid
+	}
+
+	s.LocalDirectory = dir
+	return s.Save()
 }
